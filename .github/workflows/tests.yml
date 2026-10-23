@@ -1,0 +1,17 @@
+name: Test
+
+on: push
+
+jobs:
+  test:
+    run-on: ubuntu-latest
+
+    steps:
+      - name: add required
+        run: |
+          python -m venv .venv 
+          source .venv/bin/activate
+          pip install -r requirements-dev.txt
+
+      - name: run test
+        run: python -m pytest

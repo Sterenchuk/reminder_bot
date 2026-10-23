@@ -1,0 +1,13 @@
+services:
+  reminder-bot:
+    build: .
+    container_name: reminder-bot
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - bot_data:/data
+
+volumes:
+  bot_data:

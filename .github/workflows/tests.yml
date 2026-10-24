@@ -42,9 +42,19 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build image and push on main
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: ${{ vars.DOCKERHUB_USERNAME }}/reminder-bot:latest
+          tags: |
+            ${{ vars.DOCKERHUB_USERNAME }}/reminder-bot:latest
+            ${{ vars.DOCKERHUB_USERNAME }}/reminder-bot:build-${{ github.run_number }}-sha-${{ github.sha }}
+
+          # from and to git
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+          # from image
+          # cache-from: type=registry,ref=${{ vars.DOCKERHUB_USERNAME }}/reminder-bot:latest
+          # cache-to: type=inline

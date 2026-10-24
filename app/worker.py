@@ -12,6 +12,18 @@ log = logging.getLogger("worker")
 stats = {"sent": 0, "errors": 0}
 
 
+def _error_summary(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return type(exc).__name__
+    try:
+        description = response.json().get("description")
+    except Exception:
+        description = None
+    suffix = f": {description}" if description else ""
+    return f"HTTP {response.status_code}{suffix}"
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -36,24 +48,24 @@ async def run_due(tg, path: str, tz, now: datetime) -> int:
     return sent
 
 
-async def process_update(tg, settings, update: dict, now: datetime) -> None:
+async def process_update(tg, settings, update: dict, now: datetime) -> tuple[int, str] | None:
     msg = update.get("message")
     if not msg or "text" not in msg:
-        return
+        return None
     chat_id = msg["chat"]["id"]
     text = msg["text"]
 
     if chat_id not in settings.allowed_chat_ids:
         if text.strip().lower().startswith("/start"):
-            await tg.send_message(
+            return (
                 chat_id,
                 f"Not authorized. Your chat id is {chat_id}. "
                 "Put it in ALLOWED_CHAT_IDS and restart the bot.",
             )
-        return
+        return None
 
     reply = handle_text(settings.db_path, chat_id, text, now, settings.tz)
-    await tg.send_message(chat_id, reply)
+    return (chat_id, reply)
 
 
 async def poll_loop(tg, settings) -> None:
@@ -62,13 +74,22 @@ async def poll_loop(tg, settings) -> None:
         try:
             for update in await tg.get_updates(offset):
                 offset = update["update_id"] + 1
-                await process_update(tg, settings, update, utcnow())
+                reply = await process_update(tg, settings, update, utcnow())
+                # Persist the consumed update before sending its reply. If Telegram
+                # rejects/times out sendMessage, the command must not replay after
+                # a restart and repeat its database side effects.
                 db.set_meta(settings.db_path, "offset", str(offset))
+                if reply is not None:
+                    try:
+                        await tg.send_message(*reply)
+                    except Exception as exc:
+                        stats["errors"] += 1
+                        log.warning("reply send failed: %s", _error_summary(exc))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             stats["errors"] += 1
-            log.warning("polling failed: %s", type(exc).__name__)
+            log.warning("polling failed: %s", _error_summary(exc))
             await asyncio.sleep(5)
 
 

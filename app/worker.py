@@ -32,6 +32,9 @@ async def run_due(tg, path: str, tz, now: datetime) -> int:
     """Send every reminder that is due. Failed sends stay in the DB and retry next tick."""
     sent = 0
     for r in db.due_reminders(path, to_iso(now)):
+        # The command poller can snooze a reminder after this tick selected it.
+        if not db.reminder_is_still_due(path, r["id"], r["next_run"], to_iso(now)):
+            continue
         try:
             await tg.send_message(r["chat_id"], f"Reminder: {r['text']}")
         except Exception as exc:  # never log the exception text: it may contain the bot token
@@ -41,10 +44,10 @@ async def run_due(tg, path: str, tz, now: datetime) -> int:
         sent += 1
         stats["sent"] += 1
         if r["kind"] == "once":
-            db.delete_by_id(path, r["id"])
+            db.delete_by_id_if_unchanged(path, r["id"], r["next_run"])
         else:
             nxt = next_occurrence(r["kind"], r["at_time"], now, tz)
-            db.set_next_run(path, r["id"], to_iso(nxt))
+            db.set_next_run_if_unchanged(path, r["id"], r["next_run"], to_iso(nxt))
     return sent
 
 

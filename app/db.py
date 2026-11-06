@@ -69,6 +69,34 @@ def due_reminders(path, now_iso):
         ).fetchall()
 
 
+def reminder_is_still_due(path, reminder_id, expected_next_run, now_iso) -> bool:
+    """Check that a selected reminder has not been snoozed since selection."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM reminders WHERE id = ? AND next_run = ? AND next_run <= ?",
+            (reminder_id, expected_next_run, now_iso),
+        ).fetchone()
+        return row is not None
+
+
+def set_next_run_if_unchanged(path, reminder_id, expected_next_run, next_run) -> bool:
+    with connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE reminders SET next_run = ? WHERE id = ? AND next_run = ?",
+            (next_run, reminder_id, expected_next_run),
+        )
+        return cur.rowcount > 0
+
+
+def delete_by_id_if_unchanged(path, reminder_id, expected_next_run) -> bool:
+    with connect(path) as conn:
+        cur = conn.execute(
+            "DELETE FROM reminders WHERE id = ? AND next_run = ?",
+            (reminder_id, expected_next_run),
+        )
+        return cur.rowcount > 0
+
+
 def set_next_run(path, reminder_id, next_run) -> None:
     with connect(path) as conn:
         conn.execute("UPDATE reminders SET next_run = ? WHERE id = ?", (next_run, reminder_id))

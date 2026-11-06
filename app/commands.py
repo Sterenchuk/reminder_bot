@@ -1,5 +1,6 @@
 """Chat command handling. Text in, reply text out, so it is trivial to test."""
 import re
+import calendar
 from datetime import datetime, timedelta
 
 from . import db
@@ -7,6 +8,7 @@ from .schedule import from_iso, next_occurrence, once_at, parse_hhmm, to_iso
 
 MAX_TEXT = 300
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DURATION = re.compile(r"(\d+)(mo|m|w|d|h)")
 
 HELP = """Reminder bot
 
@@ -15,7 +17,7 @@ HELP = """Reminder bot
 /once HH:MM text       one time (next time that clock hits)
 /once YYYY-MM-DD HH:MM text   one time on a date
 /list                  show your reminders
-/snooze ID [minutes]   snooze a reminder (10 minutes by default)
+/snooze ID [duration]  snooze (10m default; e.g. 20m, 1h30m, 1d, 1w, 1mo)
 /del ID                delete a reminder
 
 Example: /weekdays 09:00 Standup"""
@@ -76,22 +78,55 @@ def _delete(path, chat_id, rest) -> str:
     return f"No reminder #{rest}"
 
 
+def _snooze_duration(value: str) -> tuple[int, int]:
+    """Return calendar months and elapsed minutes from a duration expression."""
+    if value.isdigit():
+        value = f"{value}m"
+    parts = list(_DURATION.finditer(value))
+    if not parts or "".join(part.group(0) for part in parts) != value:
+        raise ValueError("invalid snooze duration")
+    if any(int(part.group(1)) < 1 for part in parts):
+        raise ValueError("snooze duration components must be positive")
+
+    months = minutes = 0
+    for part in parts:
+        amount, unit = int(part.group(1)), part.group(2)
+        if unit == "mo":
+            months += amount
+        else:
+            minutes += amount * {"m": 1, "h": 60, "d": 1440, "w": 10080}[unit]
+    return months, minutes
+
+
+def _add_months(dt: datetime, months: int) -> datetime:
+    month_index = dt.year * 12 + dt.month - 1 + months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
 def _snooze(path, chat_id, rest, now, tz) -> str:
     parts = rest.split()
     if len(parts) not in (1, 2):
-        return "Usage: /snooze ID [minutes]"
+        return "Usage: /snooze ID [duration]"
     reminder_id = parts[0].lstrip("#")
     if not reminder_id.isdigit():
-        return "Usage: /snooze ID [minutes]"
-    minutes = 10
+        return "Usage: /snooze ID [duration]"
+    duration = "10m"
+    duration_label = "10 minutes"
     if len(parts) == 2:
-        if not parts[1].isdigit() or int(parts[1]) < 1:
-            return "Snooze duration must be a positive number of minutes."
-        minutes = int(parts[1])
-    next_run = now + timedelta(minutes=minutes)
+        duration = parts[1]
+        duration_label = f"{duration} minutes" if duration.isdigit() else duration
+    try:
+        months, minutes = _snooze_duration(duration)
+    except ValueError:
+        return "Snooze duration must use positive values (e.g. 20m, 1h30m, 1d, 1w, 1mo)."
+    next_run = _add_months(now.astimezone(tz), months).astimezone(now.tzinfo)
+    next_run += timedelta(minutes=minutes)
     if not db.snooze_reminder(path, chat_id, int(reminder_id), to_iso(next_run)):
         return f"No reminder #{reminder_id}"
-    return f"Snoozed #{reminder_id} for {minutes} minutes. Next: {_fmt_local(next_run, tz)}"
+    return f"Snoozed #{reminder_id} for {duration_label}. Next: {_fmt_local(next_run, tz)}"
 
 
 def handle_text(path: str, chat_id: int, text: str, now: datetime, tz) -> str:
